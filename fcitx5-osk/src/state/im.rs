@@ -13,6 +13,7 @@ pub struct ImState {
     ims: HashMap<String, Rc<InputMethodInfo>>,
     im_names: Vec<String>,
     candidate_area_state: CandidateAreaState,
+    preedit: String,
     keyboard_backend: KeyboardBackend,
 }
 
@@ -23,6 +24,7 @@ impl ImState {
             ims: Default::default(),
             im_names: Default::default(),
             candidate_area_state: Default::default(),
+            preedit: Default::default(),
             keyboard_backend,
         }
     }
@@ -42,6 +44,15 @@ impl ImState {
 
     pub fn update_candidate_area_state(&mut self, state: Arc<Fcitx5CandidateAreaState>) {
         self.candidate_area_state.update(state);
+    }
+
+    pub fn update_preedit(&mut self, preedit: String) {
+        self.preedit = preedit;
+    }
+
+    /// The text being composed in fcitx5, e.g. the pinyin typed so far.
+    pub fn preedit(&self) -> &str {
+        &self.preedit
     }
 
     fn update_ims(&mut self, ims: Vec<InputMethodInfo>) {
@@ -71,6 +82,7 @@ impl ImState {
             tracing::warn!("unable to find im: {}", unique_name);
         }
         self.candidate_area_state.reset();
+        self.preedit.clear();
     }
 
     pub fn candidate_area_state(&self) -> &CandidateAreaState {
@@ -80,6 +92,7 @@ impl ImState {
     fn deactivate(&mut self, im: &str) {
         if self.cur_im.take_if(|i| i.unique_name() == im).is_some() {
             self.candidate_area_state.reset();
+            self.preedit.clear();
         }
     }
 

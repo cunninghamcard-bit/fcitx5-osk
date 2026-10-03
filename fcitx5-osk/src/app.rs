@@ -396,10 +396,11 @@ where
             Message::Nothing => unreachable!("Nothing should be return before here"),
             Message::Notification(e) => self.handle_notification(e),
             Message::AfterError => {
-                // clear candidates
+                // clear candidates and preedit
                 self.state
                     .im_mut()
                     .update_candidate_area_state(Arc::new(CandidateAreaState::empty()));
+                self.state.im_mut().update_preedit(String::new());
                 if let Some(KeyboardNotification::Fatal(_)) = self.notification.take() {
                     task = task.chain(self.state.window_manager_mut().shutdown());
                 }
@@ -471,6 +472,9 @@ where
                     }
                     Fcitx5VirtualkeyboardImPanelEvent::UpdateCandidateArea(state) => {
                         self.state.im_mut().update_candidate_area_state(state);
+                    }
+                    Fcitx5VirtualkeyboardImPanelEvent::UpdatePreeditArea(preedit) => {
+                        self.state.im_mut().update_preedit(preedit);
                     }
                     _ => {}
                 }

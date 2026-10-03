@@ -12,7 +12,7 @@ use iced::{
         button::{DEFAULT_PADDING, Style as ButtonStyle},
         container::Style as ContainerStyle,
         scrollable::{Direction, Scrollbar},
-        text::Shaping,
+        text::{Shaping, Wrapping},
         text_input::TextInput,
     },
     window::Id,
@@ -881,16 +881,42 @@ impl ToolbarLayout {
         for custom_action in params.state.keyboard().custom_actions() {
             row = row.push(self.custom_action_element(font_size, &custom_action.0));
         }
-        Container::new(
-            Scrollable::with_direction(
-                row,
-                Direction::Horizontal(Scrollbar::new().width(unit).scroller_width(unit).spacing(2)),
+        // The text being composed on the left, the actions on the right. The left part is a drag
+        // handle in float mode like the blank part of the toolbar.
+        let state = params.state;
+        let window_id = params.window_id;
+        Row::new()
+            .height(Length::Fill)
+            .align_y(Vertical::Center)
+            .push(Movable::new(
+                Container::new(
+                    Text::new(state.im().preedit())
+                        .size(font_size)
+                        .shaping(Shaping::Advanced)
+                        .wrapping(Wrapping::None),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_y(Length::Fill)
+                .clip(true)
+                .padding(padding::horizontal(2 * unit)),
+                move |delta| {
+                    state
+                        .new_position_message(window_id, delta)
+                        .unwrap_or(Message::Nothing)
+                },
+                state.placement() == Placement::Float,
+            ))
+            .push(
+                Scrollable::with_direction(
+                    row,
+                    Direction::Horizontal(
+                        Scrollbar::new().width(unit).scroller_width(unit).spacing(2),
+                    ),
+                )
+                .style(widget::scrollable_style),
             )
-            .style(widget::scrollable_style),
-        )
-        .height(Length::Fill)
-        .width(Length::Fill)
-        .into()
+            .into()
     }
 
     fn combo_action_element<'a, 'b>(
