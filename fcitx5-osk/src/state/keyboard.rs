@@ -68,9 +68,14 @@ impl ModifierState {
     }
 }
 
+/// Interval between two key events while a held key is repeating.
+const KEY_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
+
 struct KeyState {
     pressed_time: u128,
     selected_key_value: KeyValue,
+    /// The key has been sent repeatedly while being held, so releasing it sends nothing.
+    repeating: bool,
 }
 
 struct HoldingKeyState {
@@ -280,7 +285,10 @@ impl KeyboardState {
                 return self.hold_key(common, key_widget_event, pressed_time);
             }
             KeyEventInner::Held(pressed_time) => {
-                self.set_held(common, pressed_time);
+                return self.set_held(common, pressed_time);
+            }
+            KeyEventInner::Repeat(pressed_time) => {
+                return self.repeat_key(common, pressed_time);
             }
             KeyEventInner::Released(key_widget_event) => {
                 return self.release_key(common, key_widget_event);
@@ -681,6 +689,7 @@ impl KeyboardState {
                 KeyState {
                     pressed_time,
                     selected_key_value: common.key_value.clone(),
+                    repeating: false,
                 }
             });
         }
@@ -738,6 +747,9 @@ impl KeyboardState {
             self.holding_key_state
                 .take_if(|s| s.name == common.key_name);
 
+            if key_state.repeating {
+                return Message::nothing();
+            }
             let pressed_time = key_state.pressed_time;
             let released_time = now();
 
@@ -854,7 +866,7 @@ impl KeyboardState {
         task
     }
 
-    fn set_held(&mut self, common: KeyEventCommon, pressed_time: u128) {
+    fn set_held(&mut self, common: KeyEventCommon, pressed_time: u128) -> Task<Message> {
         if let Some(holding_key_state) = &mut self.holding_key_state
             && holding_key_state.name == common.key_name
         {
@@ -865,7 +877,14 @@ impl KeyboardState {
                     pressed_time,
                     holding_key_state.pressed_time
                 );
-                return;
+                return Message::nothing();
+            }
+            if holding_key_state.key.secondaries().is_empty()
+                && is_repeatable(&common.key_value)
+                && let Some(key_state) = self.pressed_keys.get_mut(&common.key_name)
+            {
+                key_state.repeating = true;
+                return self.repeat_key(common, pressed_time);
             }
             holding_key_state.secondary_shown = true;
             if !holding_key_state.flags.is_empty()
@@ -880,6 +899,46 @@ impl KeyboardState {
         } else {
             tracing::debug!("[{}] is not holding", common.key_name,);
         }
+        Message::nothing()
+    }
+
+    /// Send a press and a release of a held key, then schedule the next one until it is released.
+    fn repeat_key(&mut self, common: KeyEventCommon, pressed_time: u128) -> Task<Message> {
+        let Some(key_state) = self.pressed_keys.get(&common.key_name) else {
+            return Message::nothing();
+        };
+        if !key_state.repeating || key_state.pressed_time != pressed_time {
+            return Message::nothing();
+        }
+        let key_value = key_state.selected_key_value.clone();
+        let time = now();
+        let key_name = common.key_name.clone();
+        self.keyboard_backend
+            .process_key_events(
+                &mut self.keyboard_backend_state,
+                vec![
+                    ProcessKeyEventRequest {
+                        key_value: key_value.clone(),
+                        is_release: false,
+                        time,
+                    },
+                    ProcessKeyEventRequest {
+                        key_value,
+                        is_release: true,
+                        time,
+                    },
+                ],
+                self.font,
+            )
+            .map(move |r| {
+                r.unwrap_or_else(|e| {
+                    app::error_with_context(e, format!("send repeated key failed: {}", key_name))
+                })
+            })
+            .chain(Task::future(async move {
+                time::sleep(KEY_REPEAT_INTERVAL).await;
+                KeyEvent::new(common, KeyEventInner::Repeat(pressed_time)).into()
+            }))
     }
 
     pub fn clear_fcitx5_hidden(&mut self) -> Task<Message> {
@@ -952,6 +1011,7 @@ enum KeyEventInner {
     Pressed(KeyWidgetEvent),
     Holding(KeyWidgetEvent, u128),
     Held(u128),
+    Repeat(u128),
     Released(KeyWidgetEvent),
     SelectSecondary,
     UnselectSecondary,
@@ -1552,6 +1612,11 @@ struct ProcessKeyEventRequest {
     key_value: KeyValue,
     is_release: bool,
     time: u128,
+}
+
+/// Keys that keep firing while held, like a hardware keyboard.
+fn is_repeatable(key_value: &KeyValue) -> bool {
+    matches!(key_value.keysym(), Keysym::BackSpace | Keysym::Delete)
 }
 
 fn to_modifier_state(key_value: &KeyValue) -> ModifierState {
